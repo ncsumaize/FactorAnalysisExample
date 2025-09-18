@@ -1,0 +1,397 @@
+---
+title: "Factor analysis example"
+author: "Jim Holland"
+date: "2025-06-04"
+output: html_document
+---
+
+```{r setup, include=T}
+knitr::opts_chunk$set(echo = TRUE)
+library(psych)
+library(ggplot2)
+library(dplyr)
+```
+
+A is a correlation matrix of stock market prices for 5 companies, from Johnson and Wichern p . 376
+
+```{r}
+A = matrix(data = c(1, 0.577, 0.509, 0.387, 0.462,
+                    0.577, 1, 0.599, 0.389, 0.322,
+                    0.509, 0.599, 1, 0.436, 0.426,
+                    0.387, 0.389, 0.436, 1, 0.523,
+                    0.462, 0.322, 0.426, 0.523, 1), nrow = 5)
+A
+```
+
+# PCA of original data matrix = eigen decomposition of the covariance matrix
+# (but PCA of the covariance matrix is NOT something we want!)
+
+decompose into PCs  
+do not use prcomp() or the like, as those expect the supplied matrix to be the data matrix itself, not its correlation matrix  
+the PCs are the eigenvectors of the correlation matrix  
+for example, prcomp(A) returns principal components of the correlation matrix, but that is NOT what we want.
+```{r}
+prcomp(A, center = F)
+```
+Notice that the PCs are same as eigenvectors below (if we use center = F) but the variances associated with these PCs are NOT the eigenvalues of the correlation matrix:
+```{r}
+prcomp(A, center = F)$sdev^2
+```
+ie, 2.04 != 2.857  
+because the variances of standardized variables (all 1) are not same as the variance of a column of a correlation matrix  
+so they should not be same thing!  
+  
+Here is the proper decomposition of the correlation matrix:
+```{r}
+eigen(A)
+```
+Again, notice that these eigenvectors match the PCs of the correlation matrix, but the eigenvalues are different. This is correct result.  
+this matches Johnson and Wichern results P. 376 - 377  
+
+# PCs are one possible solution to factor analysis model, but not the best
+
+Now, how does this relate to factor analysis?  
+Same example is used on P. 408 in Johnson and Wichern for factor analysis  
+Factor loadings are the eigenvectors of the correlation matrix TIMES the square root of corresponding eigenvalue  
+So, loadings on Factor 1 for a one-factor model are:
+$\mathbf{L} = \sqrt(\lambda_1) \times x_1$
+
+```{r}
+L1 = sqrt(eigen(A)$values[1]) * eigen(A)$vectors[,1]
+L1
+```
+
+Indeed, this matches the factor loadings in Table 9.2 of J & W  
+Based on this, a one-factor model gives the following estimated covariance matrix (which, will actually be an estimated correlation matrix in this case!)
+
+```{r}
+LLp = L1%*%t(L1) # equivalently, L1%o%L1 or outer(L1, L1)
+LLp
+```
+
+The specific variances are the differences between the observed variances (all 1, in this case) and the diagonal elements of LLp:
+```{r}
+psi = diag(1 - diag(LLp))
+psi
+```
+
+The covariance matrix based on the one-factor model is:
+
+$\mathbf{\Sigma} = \mathbf{LL'} + \mathbf{\Psi}$
+
+```{r}
+S = LLp + psi
+S
+```
+
+The residual matrix is the difference between the observed correlation matrix and this outer product LL'
+```{r}
+R = A - S
+R
+```
+
+The cumulative propotion of total (standardized) sample variance explained by the one factor model
+is the sum of diagonal elements of LLp divided by the sum diagonal of original matrix (5, in this example)
+This is the proportion of variance accounted for by the Factor without using psi values to 'fix it up'
+```{r}
+sum(diag(LLp))/5
+```
+Agrees with value in Table 9.2 of J&W  
+
+So far, so good for factors estimated with the principal components method 
+
+
+# Maximum likelihood solution to factor analysis model gets closer to observed covariances than PC solution
+  
+But the maximum likelihood estimation methods gives different factors and explains more of the covariances (and less of the variances)  
+```{r}
+fa1.ml = factanal(A, factors = 1, covmat = A)
+fa1.ml
+```
+Compare the estimated covariances based on just this one factor from ML vs one factor from PCA:
+```{r}
+LLp.ml = fa1.ml$loadings %*% t(fa1.ml$loadings)
+LLp.ml
+```
+The variances (digaonal values of the matrix) are farther away from 1 from this model than they were in the PC factor model, so the psi values to 'fix up' the diagonals are larger:
+```{r}
+psi.ml = diag(1 - diag(LLp.ml))
+psi.ml
+```
+Note that these diagonal psi values were reported in the factanal output as 'uniquenesses'. And the psi values for the ml model are larger than the psi values for the pc model:
+```{r}
+diag(psi.ml - psi)
+```
+The PC model does a BETTER job of estimating the variances than the max. likelihood model.  
+BUT, the maximum likelihood model does a better job of estimating the COVARIANCES. The residuals from the predicted covariance matrix based on one factor plus psi are generally SMALLER with the maximum likelihood model:
+```{r}
+R.ml = A - LLp.ml - psi.ml
+R.ml
+```
+Here are the distributions of absolute values of residuals from the maximum likelihood model:
+```{r}
+summary(abs(as.vector(R.ml)))
+```
+vs. the residuals from the PC model:
+```{r}
+summary(abs(as.vector(R)))
+```
+## Factor analysis goal is to approximate the observed covariances with a few factors. 
+## PC analysis goal is to approximate the observed variances with a few factors!  
+
+From here on, we will only work with maximum likelihood solutions to the factor analysis model.
+
+# FA2 model  
+Here is a two-factor model estimated with maximum likelihood:
+```{r}
+fa2.ml = factanal(A, factors = 2, covmat = A, rotation = "none")
+fa2.ml
+```
+
+Note that the two vectors of factor loadings are NOT orthogonal! They are correlated:
+```{r}
+cor(fa2.ml$loadings)
+```
+This is another difference with PCA, the PCs are all uncorrelated. Factor loadings can be correlated. 
+This point is also tricky because the underlying latent variables that the factors represent are themselves generally considered orthogonal. I struggle with fully understanding this point, but I think it means that you can consider the two factors as inhabiting a 2-dimensional vector space and the x and y coordinates of that space corresponding to Factors 1 and 2 are orthogonal, they are different dimensions.  BUT the observed values of the loadings themselves may be correlated (clustered in certain areas of the 2-D space).  
+(Finally, that last interpretation itself gets upended if you later do an oblique rotation where the latent variable factors themselves can be correlated, more on rotations below...)  
+
+Also note that first factor in fa2 model is NOT the same as first factor in fa1 model!  
+More covariance can be accounted for with two different (and correlated) factors than the first factor plus an extra  
+  
+  
+Also, this solution is similar to, but not exactly the same as solution in Table 9.3 of J&W. I assume this has to do with details of the ML estimation methods; factanal() in R model explains a tiny bit more total variance than the J&W solution. Furthermore, factanal() printout suppresses small values even if not zero. In the output above the loading of stock 4 on factor 2 is not reported. It is small but not zero, as can be seen by directly showing the loadings:
+```{r}
+fa2.ml$loadings[,1:2]
+```
+Anyway, these values are very close to J&W Table 9.3 solutions.
+
+# Rotations 
+visualize the two factors with no rotation
+```{r}
+fa2.ml.df = data.frame(Factor1 = fa2.ml$loadings[,1], Factor2 = fa2.ml$loadings[,2])
+ggplot(data = fa2.ml.df, aes(x = Factor1, y = Factor2)) +
+  geom_point(aes(colour = as.factor(1:5))) +
+  ggtitle("No rotation")
+```
+  
+What is the solution with no rotation, exactly?  
+Maximum likelihood solutions of factor analysis models impose the following condition on the factors:  
+$\mathbf{L'} \Psi^{-1} \mathbf{L} = \mathbf{\Delta}$  
+where $\mathbf{\Delta}$ is some diagonal matrix.  
+  
+Let's check our model results to see if it is true without rotation:
+```{r}
+t(fa2.ml$loadings[,1:2]) %*% solve(diag(fa2.ml$uniquenesses)) %*% fa2.ml$loadings[,1:2]
+```
+Yes, it is approximately diagonal, the off-diagonal values are super tiny!
+
+Notice that this property means that although the factors are not uncorrelated (their dot product is not zero), they do have the property that 'weighting' the dot product elements by the inverses of the uniqueness variances produces zero.
+  
+Varimax rotation (default for factanal())  
+Varimax rotation maximizes the variances of the squared loadings across factors
+```{r}
+fa2.ml.vx = factanal(A, factors = 2, covmat = A, rotation = "varimax")
+fa2.ml.vx
+```
+Note, this is the default rotation, same as:
+fa2.ml.vx = factanal(A, factors = 2, covmat = A)
+
+The variance of squared loadings across factors is larger for varimax rotation than the un-rotated solution. Here is variance of squared loadings for varimax:
+```{r}
+var(as.vector(fa2.ml.vx$loadings[,1:2]^2))
+```
+Compare to un-rotated solution:
+```{r}
+var(as.vector(fa2.ml$loadings[,1:2]^2))
+```
+
+
+```{r}
+fa2.ml.vx.df = data.frame(Factor1 = fa2.ml.vx$loadings[,1], Factor2 = fa2.ml.vx$loadings[,2])
+ggplot(data = fa2.ml.vx.df, aes(x = Factor1, y = Factor2)) +
+  geom_point(aes(colour = as.factor(1:5)))+
+  ggtitle("Varimax rotation")
+```
+  
+You can measure the angle of rotation from the cosine of the vectors  
+Here is function from Graeme Walsh https://stackoverflow.com/questions/1897704/angle-between-two-vectors-in-r
+```{r}
+angle <- function(x,y){
+  dot.prod <- x%*%y 
+  norm.x <- norm(x,type="2")
+  norm.y <- norm(y,type="2")
+  theta <- acos(dot.prod / (norm.x * norm.y))
+  as.numeric(theta)
+}
+```
+
+Measure the angle between the vectors from origin to two different data point x and y coordinates  
+For example, the angle between the vectors from origin to the first two stock loadings without rotation:
+```{r}
+angle(unlist(fa2.ml.df[1,]), unlist(fa2.ml.df[2,]))*180/pi
+```
+
+Compare to the angle between the vectors from origin to the first two stock loadings with varimax rotation:
+```{r}
+angle(unlist(fa2.ml.vx.df[1,]), unlist(fa2.ml.vx.df[2,]))*180/pi
+```
+
+These are identical, so the rotation has not changed the angle!  
+Because varimax is an orthogonal rotation  
+
+Why isn't the varimax solution the initial un-rotated solution? Remember that the ML estimation imposes the condition that $ \mathbf{L'} \Psi^{-1} \mathbf{L} $ produces a diagonal matrix. This is NOT true for the varimax rotation:
+```{r}
+t(fa2.ml.vx$loadings[,1:2]) %*% solve(diag(fa2.ml.vx$uniquenesses)) %*% fa2.ml.vx$loadings[,1:2]
+```
+But, the varimax rotation is a perfectly good solution anyway, it just does not have that uniqueness property and is one of many possible rotations of the initial solution that are valid.
+
+
+Other rotations may be non-orthogonal and will change the angles  
+eg, oblimin rotation
+requires fa() function in psych package (not available in factanal)
+```{r}
+fa2.ml.om = fa(A, nfactors = 2, covar = T, rotate = "oblimin")
+fa2.ml.om
+```
+The output from psych::fa() is different, but MR1 and MR2 correspond to factors 1 and 2 loadings. oblimin tries to maximize the difference in loadings so that each factor has most loadings either large or small, with less 'medium' loadings, so the variables can be associated more strongly with individual factors. 
+
+```{r}
+fa2.ml.om.df = data.frame(Factor1 = fa2.ml.om$loadings[,1], Factor2 = fa2.ml.om$loadings[,2])
+ggplot(data = fa2.ml.om.df, aes(x = Factor1, y = Factor2)) +
+  geom_point(aes(colour = as.factor(1:5)))+
+  ggtitle("Oblimin rotation")
+
+```
+
+Compare the angle of vectors from origin to the first two stock loadings with oblimin rotation:
+```{r}
+angle(unlist(fa2.ml.om.df[1,]), unlist(fa2.ml.om.df[2,]))*180/pi
+```
+
+Now the angle has changed with an oblique rotation!  
+Oblimin is used because sometimes oblique rotation is easier to interpret and we don't need to assume factors are uncorrelated.  
+
+Comparing the rotations visually from plots above is hard because rotation is around the origin, which is not evendisplayed in the original plots!  
+So, plot all three rotations together in a common plot to show it better  
+Put the three rotation data frames together  
+```{r}
+fa2.ml.df$Rotation = "No Rotation"
+fa2.ml.df$Stock = 1:5
+
+fa2.ml.vx.df$Rotation = "Varimax"
+fa2.ml.vx.df$Stock = 1:5
+
+fa2.ml.om.df$Rotation = "Oblimin"
+fa2.ml.om.df$Stock = 1:5
+
+all.rotations = bind_rows(fa2.ml.df, fa2.ml.vx.df, fa2.ml.om.df) |>
+  mutate(Stock = as.factor(Stock),
+         Rotation = factor(Rotation, levels = c("No Rotation", "Varimax", "Oblimin")))
+```
+
+Plot the three with vectors from origin to stock loading points to follow the angles across rotations:
+```{r}
+ggplot(data = all.rotations, aes(x = Factor1, y = Factor2)) +
+  geom_point(aes(colour = Stock)) +
+  geom_segment(aes(x = 0, y = 0, xend = Factor1, yend = Factor2, colour = Stock)) +
+  facet_wrap(facets = ~ Rotation) 
+```
+# Simulation of factor analysis starting from data matrix
+
+Now, let's generate a data matrix by simulation to produce a given variance-covariance matrix, subject that to factor analysis, and generate the scores.  
+Example will be a simulation of 50 genotypes measured at 6 environments. Set up the variance covariance matrix so that 4 environments have a positive correlation with each other but a negative correlation with the other two environments.
+```{r}
+Cormat = matrix(c(1, 0.8, 0.7, -0.2, -0.3,
+                0.8, 1, 0.9, -0.3, -0.2,
+                0.7, 0.9,  1, -0.1, 0,
+                -0.2, -0.3, -0.1, 1, 0.8,
+                -0.3, -0.2, 0, 0.8, 1), byrow =T, nrow = 5)
+Cormat
+```
+
+check that it is positive definite:
+```{r}
+eigen(Cormat)
+```
+Cool.  
+Make it into a covariance matrix by multiplying by diagonal with square roots of the variances
+```{r}
+V = diag(c(10,9,8,7,6))
+Covmat = V%*%Cormat%*%V
+Covmat
+```
+Now sample the 50 IDV genotypes from this distribution
+```{r}
+set.seed(124)
+samp = MASS::mvrnorm(n = 100, mu = c(0,0,0,0,0), Sigma = Covmat)
+head(samp)
+```
+Now generate the sample covar matrix from these data:
+```{r}
+CovSamp = cov(samp)
+CovSamp
+```
+It doesn't match the true covar matrix, but we will work with it.  
+Subject CovSamp to factor analysis with 2 factors. 
+```{r}
+fa2 = factanal(x = samp, factors = 2, scores = "Bartlett")
+fa2
+```
+
+Two factors captures 80% of the variance, that is pretty good. Of course, we are using 15 parameters to estimate...15 parameters! You might think we should be able to recreate the observed covariance matrix exactly with the same number of parameters, but this is not true. The factor analysis model assumes that the underlying covariance structure can be modeled well with the outer product of the factor loading matrix, but this is not necessarily the case (not all covariance matrices can be captured well with a factor model even if the number of parameters is the same as an unstructured matrix...so why would someone use factor analysis when the number of variables is small? It would make sense if they had a strong hypothesis that a few latent factors are generating the observed covariance structure. For the purpose of modeling GxE interactions this is unlikely to be true, we really want to use it for parsimony in estimating large covariance matrices and we are not tied to particular hypotheses about the underlying latent variables). The factor-model-estimated covariance matrix does a relatively poor job of modeling the variances in the first and last environments, but it's not terrible. Here is the estimated correlation matrix from this solution:
+
+```{r}
+L2 = fa2$loadings[,1:2]
+L2%*%t(L2) + diag(fa2$uniquenesses)
+```
+Compare this to the correlation matrix estimated from the data records directly:
+```{r}
+cov2cor(CovSamp)
+```
+You can see it's not exactly the same but it's a pretty good approximation.
+
+Now we will work with psych::fa() function instead of factanal because fa() allows us to estimate parameters on the covariance scale. factanal() will only do it on the correlation scale; results could be forced back into covariances but it's not direct, so let's just do it the easy way with fa() and argument covar = T:
+
+```{r}
+fa2 = fa(r = samp, nfactors = 2, covar = T, scores = "tenBerge")
+fa2
+```
+Now this 2 factor model explains all of the observed variances.  
+In fact, it predicts TOO much variance for second environment (u2 or uniqueness value is negative).
+
+Check out the loadings from this model:
+```{r}
+fa2$loadings
+```
+The first factor corresponds mostly to performance in environments 1 - 3; the second factor corresponds to performance in environments 4 - 5. This result is sensible, given the observed correlation matrix of performance across environments.  
+
+Using these loadings plus the uniqueness values we can recapitulate the observed covariance matrix:
+```{r}
+fa2$loadings %*% t(fa2$loadings) + diag(fa2$uniquenesses)
+```
+Compute the residual covariances (what is not explained by the factor model):
+```{r}
+R2 = CovSamp - (fa2$loadings %*% t(fa2$loadings) + diag(fa2$uniquenesses))
+R2
+```
+The model has some trouble getting the covariances between environments 1 and 5 and between 2 and 4.  
+  
+Now we get the genotype scores (note that the default regression estimation method did very poorly in this example, here we used option "tenBerge" for score estimation):
+```{r}
+geno.scores = fa2$scores
+head(geno.scores)
+```
+Genotype 3 has a strong positive score on the first factor and very strong negative score on the 2nd factor, so it means that it performs well in environmnets 1 - 3 and poorly in environments 4 - 5. Genotype 5 has the opposite pattern of scores, and it should be better in enviroments 4 - 5 and poor in environments 1 - 3. Multiplying the genotype scores by the environment loadings and summing these products over factors generates the factor-model predicted genotype-environment values. The multiplication is efficiently accomplished by matrix multiplication as the transpose of this:
+
+$ \mathbf{LF} $
+
+```{r}
+model.based.preds = geno.scores %*% t(fa2$loadings)
+head(model.based.preds)
+```
+Compare to the actual values for genotype 1 in each of the 5 environments:
+```{r}
+samp[1:6,]
+```
+It's clear that these are similar values, but not exactly the same (and some are pretty far off). That is because these values are based purely on the factor part of the model. We know that the factor loadings don't estimate the variances well, and the model adds the uniqueness values in psi to account for the difference. Those differences are also not reflected here. There is another set of residuals measuring the differences between the factor model predicted values and the observed values. The variance of those residuals within each environment is the uniqueness value for that environment.
